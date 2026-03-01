@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mind Map Explorer</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242736;
+  --border: #2e3248;
+  --text: #e1e4ed;
+  --text-dim: #8b90a5;
+  --accent: #4e79a7;
+}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; height: 100vh; }
+#app { display: flex; height: 100vh; }
+
+/* Sidebar */
+#sidebar {
+  width: 340px; min-width: 340px; background: var(--surface);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  overflow: hidden; z-index: 10;
+}
+#sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); }
+#sidebar-header h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+#sidebar-header p { font-size: 12px; color: var(--text-dim); }
+.search-box {
+  margin: 12px 16px; padding: 8px 12px; background: var(--surface2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  font-size: 14px; width: calc(100% - 32px); outline: none;
+}
+.search-box:focus { border-color: var(--accent); }
+
+/* Tabs */
+.tabs { display: flex; border-bottom: 1px solid var(--border); }
+.tab {
+  flex: 1; padding: 10px 8px; text-align: center; font-size: 12px;
+  font-weight: 600; cursor: pointer; color: var(--text-dim);
+  border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab:hover { color: var(--text); }
+
+.tab-content { flex: 1; overflow-y: auto; padding: 12px 16px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Filter pills */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.pill {
+  padding: 4px 10px; border-radius: 12px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface2); color: var(--text-dim);
+  transition: all 0.15s;
+}
+.pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+.pill:hover { border-color: var(--accent); }
+
+/* Thread list items */
+.thread-item {
+  padding: 10px; margin-bottom: 8px; background: var(--surface2);
+  border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+  transition: all 0.15s;
+}
+.thread-item:hover { border-color: var(--accent); }
+.thread-item.highlighted { border-color: var(--accent); background: rgba(78,121,167,0.15); }
+.thread-item h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; line-height: 1.3; }
+.thread-item p { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+.thread-item .meta { display: flex; gap: 8px; margin-top: 6px; }
+.thread-item .meta span { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--bg); color: var(--text-dim); }
+
+/* Learning path */
+.path-item { padding: 12px; margin-bottom: 8px; background: var(--surface2); border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.path-item:hover { border-color: var(--accent); }
+.path-item h3 { font-size: 14px; margin-bottom: 4px; }
+.path-item p { font-size: 12px; color: var(--text-dim); }
+.path-item .count { font-size: 11px; color: var(--accent); margin-top: 4px; }
+
+/* Concept list */
+.concept-item {
+  display: inline-block; padding: 4px 10px; margin: 3px; border-radius: 12px;
+  font-size: 12px; cursor: pointer; background: var(--surface2);
+  border: 1px solid var(--border); transition: all 0.15s;
+}
+.concept-item:hover { border-color: var(--accent); color: var(--accent); }
+.concept-item.active { background: var(--accent); color: white; }
+
+/* Node detail panel */
+#detail-panel {
+  display: none; position: absolute; right: 16px; top: 16px;
+  width: 360px; max-height: calc(100vh - 32px); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px; z-index: 20;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+#detail-panel.visible { display: block; }
+#detail-panel h2 { font-size: 16px; margin-bottom: 8px; line-height: 1.3; }
+#detail-panel .close-btn {
+  position: absolute; top: 12px; right: 12px; cursor: pointer;
+  color: var(--text-dim); font-size: 18px; line-height: 1;
+}
+#detail-panel .close-btn:hover { color: var(--text); }
+#detail-panel .summary { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin-bottom: 12px; }
+#detail-panel .concepts-list { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+#detail-panel .concepts-list span { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--surface2); color: var(--text-dim); }
+#detail-panel .links { margin-top: 12px; }
+#detail-panel .links a { color: var(--accent); font-size: 13px; text-decoration: none; }
+#detail-panel .links a:hover { text-decoration: underline; }
+#detail-panel .related { margin-top: 12px; }
+#detail-panel .related h4 { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+#detail-panel .related-item { font-size: 12px; padding: 4px 0; cursor: pointer; color: var(--accent); }
+
+/* Chat panel */
+#chat-panel { display: none; }
+#chat-panel.active { display: flex; flex-direction: column; height: 100%; }
+#chat-messages { flex: 1; overflow-y: auto; padding: 8px 0; }
+.chat-msg { margin-bottom: 12px; font-size: 13px; line-height: 1.5; }
+.chat-msg.user { color: var(--accent); }
+.chat-msg.assistant { color: var(--text); }
+.chat-sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.chat-sources strong { font-size: 11px; color: var(--text-dim); }
+.chat-source-item {
+  display: block; margin-top: 6px; padding: 8px 10px; background: var(--surface2);
+  border-radius: 6px; cursor: pointer; border: 1px solid transparent; transition: all 0.15s;
+}
+.chat-source-item:hover { border-color: var(--accent); }
+.chat-source-title { display: block; font-size: 12px; font-weight: 600; color: var(--accent); }
+.chat-source-summary { display: block; font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+#chat-input-area { display: flex; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+#chat-input {
+  flex: 1; padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 13px; outline: none;
+}
+#chat-send {
+  padding: 8px 16px; background: var(--accent); color: white; border: none;
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+}
+#chat-send:hover { opacity: 0.9; }
+
+/* Graph area */
+#graph-container { flex: 1; position: relative; }
+svg { width: 100%; height: 100%; }
+.node circle { cursor: pointer; stroke-width: 2; transition: r 0.2s; }
+.node circle:hover { filter: brightness(1.3); }
+.node text { font-size: 10px; fill: var(--text-dim); pointer-events: none; }
+.link { stroke-opacity: 0.3; }
+.link.highlighted { stroke-opacity: 0.8; stroke-width: 2 !important; }
+.node.dimmed circle { opacity: 0.15; }
+.node.dimmed text { opacity: 0.1; }
+.link.dimmed { stroke-opacity: 0.03; }
+
+/* Tooltip */
+#tooltip {
+  display: none; position: absolute; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  max-width: 300px; pointer-events: none; z-index: 30;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+#tooltip h3 { font-size: 13px; margin-bottom: 4px; }
+#tooltip p { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+
+/* Controls overlay */
+#controls {
+  position: absolute; bottom: 16px; left: 16px; display: flex; gap: 8px; z-index: 10;
+}
+#controls button {
+  padding: 6px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text-dim); font-size: 12px; cursor: pointer;
+}
+#controls button:hover { border-color: var(--accent); color: var(--text); }
+#controls button.active { background: var(--accent); color: white; border-color: var(--accent); }
+#btn-refresh { position: relative; }
+#btn-refresh.loading { pointer-events: none; opacity: 0.7; }
+#btn-refresh .spinner {
+  display: none; width: 12px; height: 12px; border: 2px solid var(--text-dim);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite;
+  margin-right: 4px; vertical-align: middle; display: inline-block;
+}
+#btn-refresh:not(.loading) .spinner { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Toast notification */
+#toast {
+  position: fixed; bottom: 24px; right: 24px; background: var(--surface);
+  border: 1px solid var(--accent); border-radius: 8px; padding: 12px 20px;
+  color: var(--text); font-size: 13px; z-index: 200; opacity: 0;
+  transform: translateY(10px); transition: all 0.3s; pointer-events: none;
+}
+#toast.visible { opacity: 1; transform: translateY(0); }
+
+/* Legend */
+#legend {
+  position: absolute; top: 16px; left: 16px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  z-index: 10; font-size: 11px;
+}
+#legend .item { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; cursor: pointer; }
+#legend .item:hover { color: var(--accent); }
+#legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* Dataset switcher */
+#dataset-switcher {
+  display: flex; border-bottom: 1px solid var(--border);
+}
+#dataset-switcher .ds-btn {
+  flex: 1; padding: 10px 8px; text-align: center; font-size: 12px;
+  font-weight: 700; cursor: pointer; color: var(--text-dim);
+  background: var(--surface); border: none; border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+#dataset-switcher .ds-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--surface2); }
+#dataset-switcher .ds-btn:hover { color: var(--text); }
+
+/* Loading */
+#loading {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; background: var(--bg); z-index: 100;
+  font-size: 16px; color: var(--text-dim);
+}
+#loading.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="dataset-switcher">
+      <button class="ds-btn active" data-dataset="10kdiver">10K Diver</button>
+      <button class="ds-btn" data-dataset="moontower">Moontower</button>
+    </div>
+    <div id="sidebar-header">
+      <h1 id="dataset-title">10K Diver Mind Map</h1>
+      <p id="dataset-subtitle">90+ threads on finance, investing & mental models</p>
+    </div>
+    <input class="search-box" id="search" placeholder="Search threads, concepts..." />
+    <div class="tabs">
+      <div class="tab active" data-tab="threads">Threads</div>
+      <div class="tab" data-tab="paths">Paths</div>
+      <div class="tab" data-tab="concepts">Concepts</div>
+      <div class="tab" data-tab="chat">Chat</div>
+    </div>
+    <div class="tab-content">
+      <div class="tab-panel active" id="panel-threads">
+        <div class="filters" id="difficulty-filters">
+          <span class="pill active" data-difficulty="all">All</span>
+          <span class="pill" data-difficulty="beginner">Beginner</span>
+          <span class="pill" data-difficulty="intermediate">Intermediate</span>
+          <span class="pill" data-difficulty="advanced">Advanced</span>
+        </div>
+        <div id="thread-list"></div>
+      </div>
+      <div class="tab-panel" id="panel-paths">
+        <div id="paths-list"></div>
+      </div>
+      <div class="tab-panel" id="panel-concepts">
+        <div id="concepts-list"></div>
+      </div>
+      <div class="tab-panel" id="panel-chat">
+        <div id="chat-panel">
+          <div id="chat-messages"></div>
+          <div id="chat-input-area">
+            <input id="chat-input" placeholder="Ask about any topic..." />
+            <button id="chat-send">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="graph-container">
+    <svg id="graph"></svg>
+    <div id="tooltip"></div>
+    <div id="detail-panel">
+      <span class="close-btn" id="close-detail">&times;</span>
+      <h2 id="detail-title"></h2>
+      <div class="summary" id="detail-summary"></div>
+      <div class="concepts-list" id="detail-concepts"></div>
+      <div class="links" id="detail-links"></div>
+      <div class="related" id="detail-related"></div>
+    </div>
+    <div id="legend"></div>
+    <div id="controls">
+      <button id="btn-concepts" class="active">Concepts</button>
+      <button id="btn-reset">Reset View</button>
+      <button id="btn-refresh"><span class="spinner"></span>Refresh Data</button>
+    </div>
+    <div id="toast"></div>
+  </div>
+</div>
+<div id="loading">Loading data...</div>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+let DATA = null;
+let simulation = null;
+let showConcepts = true;
+let activeConcept = null;
+let activePath = null;
+let activeCluster = null;
+let searchTerm = "";
+let difficultyFilter = "all";
+let activeDataset = "10kdiver";
+
+const DATASETS = {
+  "10kdiver": {
+    file: "/.netlify/functions/data?dataset=10kdiver",
+    staticFile: "data/threads_enriched.json",
+    title: "10K Diver Mind Map",
+    subtitle: "90+ threads on finance, investing & mental models",
+  },
+  "moontower": {
+    file: "/.netlify/functions/data?dataset=moontower",
+    staticFile: "data/moontower_enriched.json",
+    title: "Moontower Mind Map",
+    subtitle: "200+ articles on options, volatility & decision-making",
+  },
+};
+
+// ============================================================
+// Load Data
+// ============================================================
+async function loadData(dataset) {
+  dataset = dataset || activeDataset;
+  activeDataset = dataset;
+  const info = DATASETS[dataset];
+  document.getElementById("loading").classList.remove("hidden");
+  try {
+    let resp = await fetch(info.file);
+    // Fallback to static file if function endpoint fails
+    if (!resp.ok && info.staticFile) resp = await fetch(info.staticFile);
+    DATA = await resp.json();
+    document.getElementById("loading").classList.add("hidden");
+    document.getElementById("dataset-title").textContent = info.title;
+    document.getElementById("dataset-subtitle").textContent = info.subtitle;
+    // Reset state
+    activeConcept = null;
+    activePath = null;
+    activeCluster = null;
+    searchTerm = "";
+    difficultyFilter = "all";
+    document.getElementById("search").value = "";
+    document.querySelectorAll('[data-difficulty]').forEach(p => p.classList.remove('active'));
+    document.querySelector('[data-difficulty="all"]').classList.add('active');
+    init();
+  } catch (e) {
+    document.getElementById("loading").textContent = "Error loading data. Run the scraper and enrichment scripts first.";
+    console.error(e);
+  }
+}
+
+// ============================================================
+// Initialize
+// ============================================================
+function init() {
+  buildSidebar();
+  buildGraph();
+  setupEvents();
+}
+
+// ============================================================
+// Sidebar
+// ============================================================
+function buildSidebar() {
+  renderThreadList();
+  renderPaths();
+  renderConcepts();
+  renderLegend();
+}
+
+function renderThreadList() {
+  const container = document.getElementById("thread-list");
+  const threads = getFilteredThreads();
+  container.innerHTML = threads.map(t => `
+    <div class="thread-item" data-id="${t.id}">
+      <h3>${t.title}</h3>
+      <p>${t.summary || ''}</p>
+      <div class="meta">
+        <span style="background:${getClusterColor(t.cluster)};color:white">${t.cluster || 'General'}</span>
+        <span>${t.difficulty || 'intermediate'}</span>
+      </div>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.thread-item').forEach(el => {
+    el.addEventListener('click', () => showThreadDetail(el.dataset.id));
+    el.addEventListener('mouseenter', () => highlightNode(el.dataset.id));
+    el.addEventListener('mouseleave', clearHighlight);
+  });
+}
+
+function renderPaths() {
+  const container = document.getElementById("paths-list");
+  if (!DATA.learning_paths) return;
+  container.innerHTML = DATA.learning_paths.map((p, i) => `
+    <div class="path-item" data-index="${i}">
+      <h3>${p.name}</h3>
+      <p>${p.description || ''}</p>
+      <div class="count">${(p.thread_ids || []).length} threads</div>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.path-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.index);
+      activatePath(idx);
+    });
+  });
+}
+
+function renderConcepts() {
+  const container = document.getElementById("concepts-list");
+  if (!DATA.concepts) return;
+  container.innerHTML = DATA.concepts.slice(0, 80).map(c => `
+    <span class="concept-item" data-concept="${c.name}">${c.name} (${c.thread_ids.length})</span>
+  `).join('');
+
+  container.querySelectorAll('.concept-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const name = el.dataset.concept;
+      if (activeConcept === name) {
+        activeConcept = null;
+        el.classList.remove('active');
+        clearHighlight();
+      } else {
+        document.querySelectorAll('.concept-item').forEach(e => e.classList.remove('active'));
+        activeConcept = name;
+        el.classList.add('active');
+        highlightConcept(name);
+      }
+    });
+  });
+}
+
+function renderLegend() {
+  const container = document.getElementById("legend");
+  if (!DATA.clusters) return;
+  container.innerHTML = DATA.clusters.map(c => `
+    <div class="item" data-cluster="${c.name}">
+      <div class="dot" style="background:${c.color}"></div>
+      <span>${c.name}</span>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.item').forEach(el => {
+    el.addEventListener('click', () => {
+      const name = el.dataset.cluster;
+      if (activeCluster === name) {
+        activeCluster = null;
+        clearHighlight();
+      } else {
+        activeCluster = name;
+        highlightCluster(name);
+      }
+    });
+  });
+}
+
+// ============================================================
+// Filtering
+// ============================================================
+function getFilteredThreads() {
+  if (!DATA) return [];
+  return DATA.threads.filter(t => {
+    if (difficultyFilter !== "all" && t.difficulty !== difficultyFilter) return false;
+    if (searchTerm) {
+      const s = searchTerm.toLowerCase();
+      return (t.title || '').toLowerCase().includes(s)
+        || (t.summary || '').toLowerCase().includes(s)
+        || (t.concepts || []).some(c => c.toLowerCase().includes(s));
+    }
+    return true;
+  });
+}
+
+// ============================================================
+// Graph
+// ============================================================
+function buildGraph() {
+  const svg = d3.select("#graph");
+  const container = document.getElementById("graph-container");
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  svg.attr("viewBox", [0, 0, width, height]);
+
+  // Build nodes
+  const threadNodes = DATA.threads.map(t => ({
+    id: t.id, type: "thread", title: t.title, summary: t.summary,
+    concepts: t.concepts, difficulty: t.difficulty, cluster: t.cluster,
+    url: t.url, radius: 6 + Math.min((t.concepts || []).length, 10),
+  }));
+
+  // Build concept nodes (only shared concepts)
+  const conceptNodes = showConcepts ? (DATA.concepts || []).slice(0, 40).map(c => ({
+    id: "concept_" + c.name, type: "concept", name: c.name,
+    thread_ids: c.thread_ids, radius: 4,
+  })) : [];
+
+  const nodes = [...threadNodes, ...conceptNodes];
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+
+  // Build links
+  const links = [];
+
+  // Thread-to-thread edges
+  for (const e of (DATA.edges || [])) {
+    if (nodeMap.has(e.source) && nodeMap.has(e.target)) {
+      links.push({ source: e.source, target: e.target, type: e.type, strength: e.strength || 0.5 });
+    }
+  }
+
+  // Concept-to-thread edges
+  if (showConcepts) {
+    for (const cn of conceptNodes) {
+      const concept = DATA.concepts.find(c => "concept_" + c.name === cn.id);
+      if (concept) {
+        for (const tid of concept.thread_ids) {
+          if (nodeMap.has(tid)) {
+            links.push({ source: cn.id, target: tid, type: "concept_link", strength: 0.2 });
+          }
+        }
+      }
+    }
+  }
+
+  // Cluster centers for gravity
+  const clusterCenters = {};
+  if (DATA.clusters) {
+    const angleStep = (2 * Math.PI) / DATA.clusters.length;
+    DATA.clusters.forEach((c, i) => {
+      clusterCenters[c.name] = {
+        x: width / 2 + Math.cos(angleStep * i) * Math.min(width, height) * 0.25,
+        y: height / 2 + Math.sin(angleStep * i) * Math.min(width, height) * 0.25,
+      };
+    });
+  }
+
+  // Simulation
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.type === "concept_link" ? 40 : 80).strength(d => d.strength * 0.3))
+    .force("charge", d3.forceManyBody().strength(d => d.type === "concept" ? -20 : -60))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collision", d3.forceCollide().radius(d => d.radius + 2))
+    .force("cluster", alpha => {
+      nodes.forEach(n => {
+        if (n.type === "thread" && n.cluster && clusterCenters[n.cluster]) {
+          const c = clusterCenters[n.cluster];
+          n.vx += (c.x - n.x) * alpha * 0.1;
+          n.vy += (c.y - n.y) * alpha * 0.1;
+        }
+      });
+    });
+
+  // Clear previous
+  svg.selectAll("*").remove();
+
+  const g = svg.append("g");
+
+  // Zoom
+  const zoom = d3.zoom()
+    .scaleExtent([0.3, 5])
+    .on("zoom", (event) => g.attr("transform", event.transform));
+  svg.call(zoom);
+
+  // Links
+  const link = g.append("g")
+    .selectAll("line")
+    .data(links)
+    .join("line")
+    .attr("class", "link")
+    .attr("stroke", d => d.type === "concept_link" ? "#333" : "#4e79a7")
+    .attr("stroke-width", d => d.type === "concept_link" ? 0.5 : Math.max(1, (d.strength || 0.5) * 2))
+    .attr("stroke-dasharray", d => d.type === "concept_link" ? "2,2" : (d.strength < 0.5 ? "4,4" : "none"));
+
+  // Nodes
+  const node = g.append("g")
+    .selectAll("g")
+    .data(nodes)
+    .join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (event, d) => { d.fx = event.x; d.fy = event.y; })
+      .on("end", (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+    );
+
+  node.append("circle")
+    .attr("r", d => d.radius)
+    .attr("fill", d => d.type === "concept" ? "#555" : getClusterColor(d.cluster))
+    .attr("stroke", d => d.type === "concept" ? "#777" : d3.color(getClusterColor(d.cluster)).brighter(0.5));
+
+  // Labels for threads (show on larger zoom or for important nodes)
+  node.filter(d => d.type === "thread")
+    .append("text")
+    .attr("dx", d => d.radius + 4)
+    .attr("dy", 3)
+    .text(d => d.title.length > 30 ? d.title.slice(0, 28) + '...' : d.title)
+    .style("font-size", "9px");
+
+  // Tooltip
+  const tooltip = document.getElementById("tooltip");
+  node.on("mouseenter", (event, d) => {
+    if (d.type === "thread") {
+      tooltip.innerHTML = `<h3>${d.title}</h3><p>${d.summary || ''}</p>`;
+    } else {
+      tooltip.innerHTML = `<h3>${d.name}</h3><p>Concept shared by ${d.thread_ids.length} threads</p>`;
+    }
+    tooltip.style.display = "block";
+    tooltip.style.left = (event.pageX + 12) + "px";
+    tooltip.style.top = (event.pageY - 12) + "px";
+  })
+  .on("mousemove", (event) => {
+    tooltip.style.left = (event.pageX + 12) + "px";
+    tooltip.style.top = (event.pageY - 12) + "px";
+  })
+  .on("mouseleave", () => { tooltip.style.display = "none"; })
+  .on("click", (event, d) => {
+    if (d.type === "thread") showThreadDetail(d.id);
+  });
+
+  // Tick
+  simulation.on("tick", () => {
+    link
+      .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+
+  // Store references for highlighting
+  window._graphRefs = { node, link, nodes, links, svg, g, zoom, simulation };
+}
+
+// ============================================================
+// Highlighting
+// ============================================================
+function highlightNode(threadId) {
+  const { node, link } = window._graphRefs;
+  const connectedIds = new Set([threadId]);
+
+  // Find connected nodes
+  (DATA.edges || []).forEach(e => {
+    if (e.source === threadId || (e.source && e.source.id === threadId)) connectedIds.add(typeof e.target === 'object' ? e.target.id : e.target);
+    if (e.target === threadId || (e.target && e.target.id === threadId)) connectedIds.add(typeof e.source === 'object' ? e.source.id : e.source);
+  });
+
+  node.classed("dimmed", d => !connectedIds.has(d.id));
+  link.classed("dimmed", d => {
+    const sid = typeof d.source === 'object' ? d.source.id : d.source;
+    const tid = typeof d.target === 'object' ? d.target.id : d.target;
+    return !connectedIds.has(sid) || !connectedIds.has(tid);
+  });
+  link.classed("highlighted", d => {
+    const sid = typeof d.source === 'object' ? d.source.id : d.source;
+    const tid = typeof d.target === 'object' ? d.target.id : d.target;
+    return (sid === threadId || tid === threadId);
+  });
+}
+
+function highlightConcept(conceptName) {
+  const concept = (DATA.concepts || []).find(c => c.name === conceptName);
+  if (!concept) return;
+  const ids = new Set(concept.thread_ids);
+  ids.add("concept_" + conceptName);
+
+  const { node, link } = window._graphRefs;
+  node.classed("dimmed", d => !ids.has(d.id));
+  link.classed("dimmed", d => {
+    const sid = typeof d.source === 'object' ? d.source.id : d.source;
+    const tid = typeof d.target === 'object' ? d.target.id : d.target;
+    return !ids.has(sid) && !ids.has(tid);
+  });
+}
+
+function highlightCluster(clusterName) {
+  const ids = new Set(DATA.threads.filter(t => t.cluster === clusterName).map(t => t.id));
+  const { node, link } = window._graphRefs;
+  node.classed("dimmed", d => d.type === "thread" && !ids.has(d.id));
+  link.classed("dimmed", d => {
+    const sid = typeof d.source === 'object' ? d.source.id : d.source;
+    const tid = typeof d.target === 'object' ? d.target.id : d.target;
+    return !ids.has(sid) && !ids.has(tid);
+  });
+}
+
+function activatePath(index) {
+  const path = DATA.learning_paths[index];
+  if (!path) return;
+  activePath = path;
+  const ids = new Set(path.thread_ids || []);
+  const { node, link } = window._graphRefs;
+  node.classed("dimmed", d => d.type === "thread" && !ids.has(d.id));
+  link.classed("dimmed", () => true);
+  link.classed("highlighted", d => {
+    const sid = typeof d.source === 'object' ? d.source.id : d.source;
+    const tid = typeof d.target === 'object' ? d.target.id : d.target;
+    return ids.has(sid) && ids.has(tid);
+  });
+}
+
+function clearHighlight() {
+  if (activeConcept || activePath || activeCluster) return;
+  const { node, link } = window._graphRefs;
+  node.classed("dimmed", false);
+  link.classed("dimmed", false).classed("highlighted", false);
+}
+
+// ============================================================
+// Detail Panel
+// ============================================================
+function showThreadDetail(threadId) {
+  const t = DATA.threads.find(t => t.id === threadId);
+  if (!t) return;
+
+  document.getElementById("detail-title").textContent = t.title;
+  document.getElementById("detail-summary").textContent = t.summary || "No summary available.";
+  document.getElementById("detail-concepts").innerHTML = (t.concepts || []).map(c =>
+    `<span>${c}</span>`
+  ).join('');
+  document.getElementById("detail-links").innerHTML = `
+    <a href="${t.url}" target="_blank">View original thread &rarr;</a>
+  `;
+
+  // Find related threads
+  const related = [];
+  (DATA.edges || []).forEach(e => {
+    if (e.source === threadId) {
+      const rt = DATA.threads.find(t => t.id === e.target);
+      if (rt) related.push({ thread: rt, type: e.type });
+    }
+    if (e.target === threadId) {
+      const rt = DATA.threads.find(t => t.id === e.source);
+      if (rt) related.push({ thread: rt, type: e.type });
+    }
+  });
+
+  document.getElementById("detail-related").innerHTML = related.length ? `
+    <h4>Related threads</h4>
+    ${related.map(r => `<div class="related-item" onclick="showThreadDetail('${r.thread.id}')">${r.thread.title} <small>(${r.type})</small></div>`).join('')}
+  ` : '';
+
+  document.getElementById("detail-panel").classList.add("visible");
+  highlightNode(threadId);
+}
+
+// ============================================================
+// Chat (client-side with API key)
+// ============================================================
+async function sendChat(question) {
+  const messagesEl = document.getElementById("chat-messages");
+  messagesEl.innerHTML += `<div class="chat-msg user">${question}</div>`;
+
+  // Find relevant threads by keyword matching
+  const words = question.toLowerCase().split(/\s+/);
+  const scored = DATA.threads.map(t => {
+    let score = 0;
+    const text = `${t.title} ${t.summary} ${(t.concepts || []).join(' ')}`.toLowerCase();
+    words.forEach(w => { if (text.includes(w)) score++; });
+    return { thread: t, score };
+  }).filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
+
+  const context = scored.map(s =>
+    `Thread: ${s.thread.title}\nSummary: ${s.thread.summary}\nConcepts: ${(s.thread.concepts || []).join(', ')}`
+  ).join('\n\n');
+
+  // Fetch Gemini key from server (falls back to hardcoded for local dev)
+  let GEMINI_KEY;
+  try {
+    const keyResp = await fetch("/.netlify/functions/gemini-key");
+    if (keyResp.ok) { GEMINI_KEY = (await keyResp.json()).key; }
+  } catch (_) {}
+  if (!GEMINI_KEY) {
+    messagesEl.innerHTML += `<div class="chat-msg assistant">Chat requires a GEMINI_API_KEY. Set it in your Netlify environment variables.</div>`;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
+  try {
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `You are a helpful assistant that answers questions based on the ${DATASETS[activeDataset].title} content.
+
+Here are the most relevant items:
+${context}
+
+Question: ${question}
+
+Answer concisely, citing specific items when relevant.` }] }]
+      })
+    });
+    const data = await resp.json();
+    const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || "Error getting response.";
+    // Format markdown: bold, italic, bullets
+    let html = answer
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/\n- /g, '\n• ')
+      .replace(/\n/g, '<br>');
+    // Build sources section from matched threads
+    if (scored.length > 0) {
+      html += '<div class="chat-sources"><strong>Related articles:</strong>';
+      scored.forEach(s => {
+        html += `<div class="chat-source-item" data-id="${s.thread.id}">
+          <span class="chat-source-title">${s.thread.title}</span>
+          <span class="chat-source-summary">${(s.thread.summary || '').slice(0, 80)}${s.thread.summary?.length > 80 ? '...' : ''}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    messagesEl.innerHTML += `<div class="chat-msg assistant">${html}</div>`;
+    // Attach click handlers for source items
+    messagesEl.querySelectorAll('.chat-source-item').forEach(el => {
+      el.addEventListener('click', () => {
+        showThreadDetail(el.dataset.id);
+        highlightNode(el.dataset.id);
+      });
+    });
+  } catch (e) {
+    messagesEl.innerHTML += `<div class="chat-msg assistant">Error: ${e.message}</div>`;
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function getClusterColor(clusterName) {
+  if (!DATA || !DATA.clusters) return "#4e79a7";
+  const cluster = DATA.clusters.find(c => c.name === clusterName);
+  return cluster ? cluster.color : "#4e79a7";
+}
+
+// ============================================================
+// Events
+// ============================================================
+function setupEvents() {
+  // Tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const panel = document.getElementById('panel-' + tab.dataset.tab);
+      if (panel) panel.classList.add('active');
+      // Show chat panel
+      const chatPanel = document.getElementById('chat-panel');
+      if (tab.dataset.tab === 'chat') chatPanel.classList.add('active');
+      else chatPanel.classList.remove('active');
+    });
+  });
+
+  // Search
+  document.getElementById('search').addEventListener('input', (e) => {
+    searchTerm = e.target.value;
+    renderThreadList();
+    // Also highlight matching nodes
+    if (searchTerm) {
+      const matching = new Set(getFilteredThreads().map(t => t.id));
+      const { node, link } = window._graphRefs;
+      node.classed("dimmed", d => d.type === "thread" && !matching.has(d.id));
+      link.classed("dimmed", () => true);
+    } else {
+      clearHighlight();
+    }
+  });
+
+  // Difficulty filters
+  document.querySelectorAll('[data-difficulty]').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('[data-difficulty]').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      difficultyFilter = pill.dataset.difficulty;
+      renderThreadList();
+    });
+  });
+
+  // Close detail
+  document.getElementById('close-detail').addEventListener('click', () => {
+    document.getElementById('detail-panel').classList.remove('visible');
+    clearHighlight();
+  });
+
+  // Toggle concepts
+  document.getElementById('btn-concepts').addEventListener('click', (e) => {
+    showConcepts = !showConcepts;
+    e.target.classList.toggle('active');
+    buildGraph();
+  });
+
+  // Reset view
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    activeConcept = null;
+    activePath = null;
+    activeCluster = null;
+    searchTerm = "";
+    document.getElementById('search').value = "";
+    document.querySelectorAll('.concept-item').forEach(e => e.classList.remove('active'));
+    clearHighlight();
+    const { svg, zoom } = window._graphRefs;
+    svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity);
+  });
+
+  // Chat
+  document.getElementById('chat-send').addEventListener('click', () => {
+    const input = document.getElementById('chat-input');
+    if (input.value.trim()) { sendChat(input.value.trim()); input.value = ""; }
+  });
+  document.getElementById('chat-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('chat-send').click();
+  });
+
+  // Refresh
+  document.getElementById('btn-refresh').addEventListener('click', refreshData);
+
+  // Dataset switcher
+  document.querySelectorAll('.ds-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ds = btn.dataset.dataset;
+      if (ds === activeDataset) return;
+      document.querySelectorAll('.ds-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadData(ds);
+    });
+  });
+}
+
+// ============================================================
+// Refresh & Toast
+// ============================================================
+function showToast(message, duration = 4000) {
+  const toast = document.getElementById("toast");
+  toast.textContent = message;
+  toast.classList.add("visible");
+  setTimeout(() => toast.classList.remove("visible"), duration);
+}
+
+async function refreshData() {
+  const btn = document.getElementById("btn-refresh");
+  btn.classList.add("loading");
+  btn.querySelector(".spinner").style.display = "inline-block";
+  try {
+    const resp = await fetch(`/.netlify/functions/refresh?dataset=${activeDataset}`, { method: "POST" });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || "Refresh failed");
+    if (result.newCount > 0) {
+      showToast(`Added ${result.newCount} new articles (total: ${result.totalCount})`);
+      await loadData(activeDataset);
+    } else {
+      showToast("No new articles found.");
+    }
+  } catch (e) {
+    showToast(`Refresh error: ${e.message}`, 5000);
+  } finally {
+    btn.classList.remove("loading");
+    btn.querySelector(".spinner").style.display = "none";
+  }
+}
+
+// ============================================================
+// Start
+// ============================================================
+loadData();
+</script>
+</body>
+</html>
