@@ -308,6 +308,74 @@ Guidelines:
 }
 
 // ============================================================
+// Quiz generation
+// ============================================================
+async function generateQuizzes(model, items, edges, datasetType) {
+  const quizzes = [];
+  const batchSize = 10;
+
+  const topicLabel = datasetType === "10kdiver" ? "finance/investing threads by @10kdiver" : "articles about options, volatility, and decision-making by Kris Abdelmessih";
+
+  // Per-item quizzes in batches
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const block = batch
+      .map((t) => `ID: ${t.id}\nTitle: ${t.title}\nSummary: ${t.summary || "N/A"}\nConcepts: ${(t.concepts || []).join(", ")}\nDifficulty: ${t.difficulty || "intermediate"}`)
+      .join("\n\n");
+
+    const prompt = `Generate quiz questions for these ${topicLabel}.
+
+${block}
+
+For EACH item, generate exactly 2 questions:
+1. A concept_recall question (open-ended, tests understanding of the key idea)
+2. A multiple_choice question (4 choices, tests specific knowledge)
+
+Return JSON array (no markdown fences):
+[
+  {"id": "q_<item_id>_0", "thread_id": "<item_id>", "type": "concept_recall", "question": "...", "answer": "...", "difficulty": "beginner|intermediate|advanced", "concepts": ["concept1"]},
+  {"id": "q_mc_<item_id>_0", "thread_id": "<item_id>", "type": "multiple_choice", "question": "...", "choices": ["A) ...", "B) ...", "C) ...", "D) ..."], "correct_index": 0, "explanation": "...", "difficulty": "beginner|intermediate|advanced", "concepts": ["concept1"]}
+]
+
+Make questions test genuine understanding, not just memorization.`;
+
+    try {
+      const result = await model.generateContent(prompt);
+      const text = stripFences(result.response.text());
+      quizzes.push(...JSON.parse(text));
+    } catch (e) {
+      console.log(`Quiz batch error: ${e.message}`);
+    }
+  }
+
+  // Connection quizzes from edges
+  const titleMap = Object.fromEntries(items.map((t) => [t.id, t.title]));
+  const edgeBatchSize = 20;
+  for (let i = 0; i < edges.length; i += edgeBatchSize) {
+    const batch = edges.slice(i, i + edgeBatchSize);
+    const edgeContext = batch.map((e) => `${titleMap[e.source] || e.source} -> ${titleMap[e.target] || e.target}: ${e.reason || "N/A"}`).join("\n");
+
+    const prompt = `Generate 1 connection quiz question per edge. These edges connect ${topicLabel}.
+
+Edges:
+${edgeContext}
+
+Return JSON array (no markdown fences):
+[{"id": "q_edge_<source_id>_<target_id>_0", "type": "connection", "source_thread_id": "<source_id>", "target_thread_id": "<target_id>", "question": "...", "answer": "...", "difficulty": "intermediate", "concepts": ["concept1"]}]`;
+
+    try {
+      const result = await model.generateContent(prompt);
+      const text = stripFences(result.response.text());
+      quizzes.push(...JSON.parse(text));
+    } catch (e) {
+      console.log(`Edge quiz batch error: ${e.message}`);
+    }
+  }
+
+  return quizzes;
+}
+
+// ============================================================
 // Main handler
 // ============================================================
 export default async (req) => {
@@ -409,6 +477,17 @@ export default async (req) => {
       .map((c) => ({ name: c.name, thread_ids: [...c.thread_ids], description: "" }))
       .sort((a, b) => b.thread_ids.length - a.thread_ids.length);
 
+    // 7.5 Generate quizzes for new items, merge with existing
+    console.log("Generating quizzes for new items...");
+    let quizzes = existing.quizzes || [];
+    try {
+      const newQuizzes = await generateQuizzes(model, enrichedNew, connections.edges || [], dataset);
+      quizzes = [...quizzes, ...newQuizzes];
+      console.log(`Generated ${newQuizzes.length} new quiz questions`);
+    } catch (e) {
+      console.log(`Quiz generation error: ${e.message}`);
+    }
+
     // 8. Assign clusters
     const clusterLookup = {};
     for (const cluster of connections.clusters || []) {
@@ -427,6 +506,7 @@ export default async (req) => {
       edges: connections.edges || [],
       learning_paths: connections.learning_paths || [],
       clusters: connections.clusters || [],
+      quizzes,
     };
 
     // 10. Save to Blobs

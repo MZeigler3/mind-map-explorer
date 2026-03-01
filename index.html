@@ -221,6 +221,41 @@ svg { width: 100%; height: 100%; }
   font-size: 16px; color: var(--text-dim);
 }
 #loading.hidden { display: none; }
+
+/* Quiz panel */
+#quiz-stats { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 12px; color: var(--text-dim); flex-wrap: wrap; }
+#quiz-stats .stat { font-weight: 600; color: var(--text); }
+#quiz-stats button { padding: 3px 8px; font-size: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim); cursor: pointer; }
+#quiz-stats button:hover { border-color: var(--accent); }
+#quiz-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+#quiz-area { }
+.quiz-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.quiz-card .q-type { font-size: 10px; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; letter-spacing: 0.5px; }
+.quiz-card .q-question { font-size: 14px; line-height: 1.5; margin-bottom: 12px; }
+.quiz-card textarea { width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; resize: vertical; min-height: 60px; font-family: inherit; }
+.quiz-card .mc-choices { list-style: none; padding: 0; }
+.quiz-card .mc-choices li { padding: 8px 12px; margin-bottom: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+.quiz-card .mc-choices li:hover { border-color: var(--accent); }
+.quiz-card .mc-choices li.selected { border-color: var(--accent); background: rgba(78,121,167,0.15); }
+.quiz-card .mc-choices li.correct { border-color: #59a14f; background: rgba(89,161,79,0.15); }
+.quiz-card .mc-choices li.wrong { border-color: #e15759; background: rgba(225,87,89,0.15); }
+.quiz-card .q-answer { margin-top: 12px; padding: 12px; background: var(--bg); border-radius: 6px; font-size: 13px; line-height: 1.5; border-left: 3px solid var(--accent); }
+.quiz-card .q-actions { display: flex; gap: 8px; margin-top: 12px; }
+.quiz-card .q-actions button { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; background: var(--surface); color: var(--text); transition: all 0.15s; }
+.quiz-card .q-actions button:hover { border-color: var(--accent); }
+.quiz-card .q-actions .btn-again { border-color: #e15759; color: #e15759; }
+.quiz-card .q-actions .btn-hard { border-color: #f28e2b; color: #f28e2b; }
+.quiz-card .q-actions .btn-good { border-color: #59a14f; color: #59a14f; }
+.quiz-card .q-actions .btn-easy { border-color: #4e79a7; color: #4e79a7; }
+.quiz-card .btn-reveal { width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin-top: 12px; }
+.quiz-card .btn-reveal:hover { opacity: 0.9; }
+.quiz-empty { text-align: center; padding: 40px 20px; color: var(--text-dim); font-size: 13px; }
+#import-file { display: none; }
+
+/* Graph mastery strokes */
+.node.mastery-mastered circle { stroke: #59a14f !important; stroke-width: 3px; }
+.node.mastery-learning circle { stroke: #edc948 !important; stroke-width: 3px; }
+.node.mastery-new circle { stroke-dasharray: 4,3; }
 </style>
 </head>
 <body>
@@ -239,6 +274,7 @@ svg { width: 100%; height: 100%; }
       <div class="tab active" data-tab="threads">Threads</div>
       <div class="tab" data-tab="paths">Paths</div>
       <div class="tab" data-tab="concepts">Concepts</div>
+      <div class="tab" data-tab="quiz">Quiz</div>
       <div class="tab" data-tab="chat">Chat</div>
     </div>
     <div class="tab-content">
@@ -256,6 +292,12 @@ svg { width: 100%; height: 100%; }
       </div>
       <div class="tab-panel" id="panel-concepts">
         <div id="concepts-list"></div>
+      </div>
+      <div class="tab-panel" id="panel-quiz">
+        <div id="quiz-stats"></div>
+        <div id="quiz-filters" class="filters"></div>
+        <div id="quiz-area"></div>
+        <input type="file" id="import-file" accept=".json" />
       </div>
       <div class="tab-panel" id="panel-chat">
         <div id="chat-panel">
@@ -355,9 +397,12 @@ async function loadData(dataset) {
 // Initialize
 // ============================================================
 function init() {
+  SR.load();
   buildSidebar();
   buildGraph();
   setupEvents();
+  renderQuizPanel();
+  updateMasteryClasses();
 }
 
 // ============================================================
@@ -915,6 +960,24 @@ function setupEvents() {
   // Refresh
   document.getElementById('btn-refresh').addEventListener('click', refreshData);
 
+  // Import SR progress
+  document.getElementById('import-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (SR.importData(reader.result)) {
+        showToast('Progress imported successfully');
+        renderQuizPanel();
+        updateMasteryClasses();
+      } else {
+        showToast('Invalid import file');
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  });
+
   // Dataset switcher
   document.querySelectorAll('.ds-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -957,6 +1020,206 @@ async function refreshData() {
     btn.classList.remove("loading");
     btn.querySelector(".spinner").style.display = "none";
   }
+}
+
+// ============================================================
+// SM-2 Spaced Repetition Engine
+// ============================================================
+const SR = {
+  _state: {},
+  _key() { return `sr_${activeDataset}`; },
+  load() {
+    try { this._state = JSON.parse(localStorage.getItem(this._key()) || '{}'); }
+    catch { this._state = {}; }
+  },
+  save() { localStorage.setItem(this._key(), JSON.stringify(this._state)); },
+  _getCard(id) {
+    if (!this._state[id]) {
+      this._state[id] = { ease: 2.5, interval: 0, repetitions: 0, nextReview: 0 };
+    }
+    return this._state[id];
+  },
+  review(id, grade) {
+    // grade: 0=Again, 1=Hard, 2=Good, 3=Easy (mapped to SM-2 scale 0-5)
+    const sm2Grade = [0, 2, 4, 5][grade] || 0;
+    const card = this._getCard(id);
+    if (sm2Grade < 3) {
+      card.repetitions = 0;
+      card.interval = 1;
+    } else {
+      if (card.repetitions === 0) card.interval = 1;
+      else if (card.repetitions === 1) card.interval = 6;
+      else card.interval = Math.round(card.interval * card.ease);
+      card.repetitions++;
+    }
+    card.ease = Math.max(1.3, card.ease + (0.1 - (5 - sm2Grade) * (0.08 + (5 - sm2Grade) * 0.02)));
+    card.nextReview = Date.now() + card.interval * 86400000;
+    this.save();
+  },
+  getDueQuizzes() {
+    if (!DATA || !DATA.quizzes) return [];
+    const now = Date.now();
+    return DATA.quizzes.filter(q => {
+      const card = this._state[q.id];
+      return !card || card.nextReview <= now;
+    });
+  },
+  getThreadMastery(threadId) {
+    if (!DATA || !DATA.quizzes) return 'new';
+    const threadQuizzes = DATA.quizzes.filter(q => q.thread_id === threadId);
+    if (threadQuizzes.length === 0) return 'new';
+    const reviewed = threadQuizzes.filter(q => this._state[q.id] && this._state[q.id].repetitions > 0);
+    if (reviewed.length === threadQuizzes.length) return 'mastered';
+    if (reviewed.length > 0) return 'learning';
+    return 'new';
+  },
+  exportData() {
+    const blob = new Blob([JSON.stringify(this._state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `sr_progress_${activeDataset}.json`; a.click();
+    URL.revokeObjectURL(url);
+  },
+  importData(json) {
+    try {
+      this._state = JSON.parse(json);
+      this.save();
+      return true;
+    } catch { return false; }
+  }
+};
+
+// ============================================================
+// Quiz UI
+// ============================================================
+let quizFilter = 'due';
+let currentQuizList = [];
+let currentQuizIndex = 0;
+
+function renderQuizPanel() {
+  SR.load();
+  const due = SR.getDueQuizzes();
+  const total = (DATA && DATA.quizzes) ? DATA.quizzes.length : 0;
+
+  // Stats bar
+  document.getElementById('quiz-stats').innerHTML = `
+    <span>Due: <span class="stat">${due.length}</span></span>
+    <span>Total: <span class="stat">${total}</span></span>
+    <button onclick="SR.exportData()">Export</button>
+    <button onclick="document.getElementById('import-file').click()">Import</button>
+  `;
+
+  // Filter pills
+  document.getElementById('quiz-filters').innerHTML = [
+    ['due', 'Due Now'], ['all', 'All'], ['concept_recall', 'Recall'],
+    ['connection', 'Connection'], ['multiple_choice', 'MC']
+  ].map(([val, label]) =>
+    `<span class="pill ${quizFilter === val ? 'active' : ''}" data-quiz-filter="${val}">${label}</span>`
+  ).join('');
+
+  document.querySelectorAll('[data-quiz-filter]').forEach(p => {
+    p.addEventListener('click', () => {
+      quizFilter = p.dataset.quizFilter;
+      currentQuizIndex = 0;
+      renderQuizPanel();
+    });
+  });
+
+  // Build quiz list
+  let quizzes = (DATA && DATA.quizzes) ? DATA.quizzes : [];
+  if (quizFilter === 'due') quizzes = due;
+  else if (['concept_recall', 'connection', 'multiple_choice'].includes(quizFilter))
+    quizzes = quizzes.filter(q => q.type === quizFilter);
+
+  currentQuizList = quizzes;
+  renderQuizCard();
+}
+
+function renderQuizCard() {
+  const area = document.getElementById('quiz-area');
+  if (currentQuizIndex >= currentQuizList.length) {
+    area.innerHTML = `<div class="quiz-empty">${currentQuizList.length === 0 ? 'No quizzes available. Run enrichment to generate quiz data.' : 'All done! No more cards to review.'}</div>`;
+    return;
+  }
+
+  const q = currentQuizList[currentQuizIndex];
+  const typeLabel = { concept_recall: 'Concept Recall', connection: 'Connection', multiple_choice: 'Multiple Choice' }[q.type] || q.type;
+  let html = `<div class="quiz-card" data-quiz-id="${q.id}"><div class="q-type">${typeLabel}</div><div class="q-question">${q.question}</div>`;
+
+  if (q.type === 'multiple_choice') {
+    html += `<ul class="mc-choices">${(q.choices || []).map((c, i) => `<li data-index="${i}">${c}</li>`).join('')}</ul>`;
+  } else {
+    html += `<textarea placeholder="Type your answer..."></textarea>`;
+  }
+  html += `<button class="btn-reveal">Reveal Answer</button></div>`;
+  area.innerHTML = html;
+
+  // MC choice selection
+  area.querySelectorAll('.mc-choices li').forEach(li => {
+    li.addEventListener('click', () => {
+      area.querySelectorAll('.mc-choices li').forEach(l => l.classList.remove('selected'));
+      li.classList.add('selected');
+    });
+  });
+
+  // Reveal
+  area.querySelector('.btn-reveal').addEventListener('click', () => revealQuizAnswer(q));
+}
+
+function revealQuizAnswer(q) {
+  const area = document.getElementById('quiz-area');
+  const card = area.querySelector('.quiz-card');
+
+  // Show answer
+  let answerHtml = '';
+  if (q.type === 'multiple_choice') {
+    // Mark correct/wrong
+    card.querySelectorAll('.mc-choices li').forEach(li => {
+      const idx = parseInt(li.dataset.index);
+      if (idx === q.correct_index) li.classList.add('correct');
+      else if (li.classList.contains('selected')) li.classList.add('wrong');
+    });
+    answerHtml = `<div class="q-answer">${q.explanation || q.answer || 'No explanation available.'}</div>`;
+  } else {
+    answerHtml = `<div class="q-answer">${q.answer || 'No answer available.'}</div>`;
+  }
+
+  // Remove reveal button, add answer + rating buttons
+  card.querySelector('.btn-reveal').remove();
+  card.insertAdjacentHTML('beforeend', `
+    ${answerHtml}
+    <div class="q-actions">
+      <button class="btn-again" data-grade="0">Again</button>
+      <button class="btn-hard" data-grade="1">Hard</button>
+      <button class="btn-good" data-grade="2">Good</button>
+      <button class="btn-easy" data-grade="3">Easy</button>
+    </div>
+  `);
+
+  card.querySelectorAll('.q-actions button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      SR.review(q.id, parseInt(btn.dataset.grade));
+      currentQuizIndex++;
+      renderQuizCard();
+      updateMasteryClasses();
+      // Update due count
+      const due = SR.getDueQuizzes();
+      const statEl = document.querySelector('#quiz-stats .stat');
+      if (statEl) statEl.textContent = due.length;
+    });
+  });
+}
+
+function updateMasteryClasses() {
+  if (!window._graphRefs) return;
+  const { node } = window._graphRefs;
+  node.each(function(d) {
+    if (d.type !== 'thread') return;
+    const el = d3.select(this);
+    el.classed('mastery-mastered', false).classed('mastery-learning', false).classed('mastery-new', false);
+    const mastery = SR.getThreadMastery(d.id);
+    el.classed('mastery-' + mastery, true);
+  });
 }
 
 // ============================================================

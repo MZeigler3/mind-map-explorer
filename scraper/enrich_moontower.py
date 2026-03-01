@@ -101,6 +101,106 @@ Guidelines:
     return json.loads(text)
 
 
+def generate_quizzes(articles, edges):
+    """Pass 3: Generate quiz questions for spaced repetition."""
+    quizzes = []
+
+    # Batch articles ~10 at a time for concept_recall + multiple_choice
+    batch_size = 10
+    for batch_start in range(0, len(articles), batch_size):
+        batch = articles[batch_start:batch_start + batch_size]
+        article_block = "\n\n".join(
+            f"ID: {a['id']}\nTitle: {a['title']}\nSummary: {a.get('summary', 'N/A')}\n"
+            f"Concepts: {', '.join(a.get('concepts', []))}\nDifficulty: {a.get('difficulty', 'intermediate')}"
+            for a in batch
+        )
+
+        prompt = f"""Generate quiz questions for these articles by Kris Abdelmessih (Moontower) about options, volatility, and decision-making.
+
+{article_block}
+
+For EACH article, generate exactly 2 questions:
+1. A concept_recall question (open-ended, tests understanding of the key idea)
+2. A multiple_choice question (4 choices, tests specific knowledge)
+
+Return JSON array (no markdown fences):
+[
+  {{
+    "id": "q_<article_id>_0",
+    "thread_id": "<article_id>",
+    "type": "concept_recall",
+    "question": "...",
+    "answer": "...",
+    "difficulty": "beginner|intermediate|advanced",
+    "concepts": ["concept1", "concept2"]
+  }},
+  {{
+    "id": "q_mc_<article_id>_0",
+    "thread_id": "<article_id>",
+    "type": "multiple_choice",
+    "question": "...",
+    "choices": ["A) ...", "B) ...", "C) ...", "D) ..."],
+    "correct_index": 0,
+    "explanation": "...",
+    "difficulty": "beginner|intermediate|advanced",
+    "concepts": ["concept1", "concept2"]
+  }}
+]
+
+Make questions test genuine understanding, not just memorization."""
+
+        try:
+            resp = client.models.generate_content(model=MODEL, contents=prompt)
+            text = strip_fences(resp.text)
+            batch_quizzes = json.loads(text)
+            quizzes.extend(batch_quizzes)
+        except Exception as e:
+            print(f"  Quiz batch error: {e}")
+        time.sleep(0.5)
+
+    # Connection questions from edges
+    edge_batch_size = 20
+    for batch_start in range(0, len(edges), edge_batch_size):
+        batch = edges[batch_start:batch_start + edge_batch_size]
+        title_map = {a['id']: a['title'] for a in articles}
+        edge_context = "\n".join(
+            f"{title_map.get(e['source'], e['source'])} -> {title_map.get(e['target'], e['target'])}: {e.get('reason', 'N/A')}"
+            for e in batch
+        )
+
+        prompt = f"""Generate 1 connection quiz question per edge. These edges connect articles about options, volatility, and decision-making.
+
+Edges:
+{edge_context}
+
+For each edge, generate a question testing understanding of how the two topics connect.
+
+Return JSON array (no markdown fences):
+[
+  {{
+    "id": "q_edge_<source_id>_<target_id>_0",
+    "type": "connection",
+    "source_thread_id": "<source_id>",
+    "target_thread_id": "<target_id>",
+    "question": "...",
+    "answer": "...",
+    "difficulty": "intermediate",
+    "concepts": ["concept1"]
+  }}
+]"""
+
+        try:
+            resp = client.models.generate_content(model=MODEL, contents=prompt)
+            text = strip_fences(resp.text)
+            edge_quizzes = json.loads(text)
+            quizzes.extend(edge_quizzes)
+        except Exception as e:
+            print(f"  Edge quiz batch error: {e}")
+        time.sleep(0.5)
+
+    return quizzes
+
+
 def main():
     if not RAW_PATH.exists():
         print(f"Raw data not found at {RAW_PATH}. Run scrape_moontower.py first.")
@@ -151,6 +251,15 @@ def main():
         print(f"Error generating connections: {e}")
         connections = {"edges": [], "clusters": [], "learning_paths": []}
 
+    # Pass 3: Generate quizzes
+    print("\nGenerating quiz questions...")
+    try:
+        quizzes = generate_quizzes(enriched, connections.get("edges", []))
+    except Exception as e:
+        print(f"Error generating quizzes: {e}")
+        quizzes = []
+    print(f"  Generated {len(quizzes)} quiz questions")
+
     # Build final output
     concepts_list = [
         {"name": v["name"], "thread_ids": list(v["thread_ids"]), "description": ""}
@@ -172,6 +281,7 @@ def main():
         "edges": connections.get("edges", []),
         "learning_paths": connections.get("learning_paths", []),
         "clusters": connections.get("clusters", []),
+        "quizzes": quizzes,
     }
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
@@ -184,6 +294,7 @@ def main():
     print(f"  {len(output['edges'])} edges")
     print(f"  {len(output['clusters'])} clusters")
     print(f"  {len(output['learning_paths'])} learning paths")
+    print(f"  {len(output['quizzes'])} quiz questions")
 
 
 if __name__ == "__main__":
