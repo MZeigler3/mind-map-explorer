@@ -63,11 +63,15 @@ export GEMINI_API_KEY=your-key-here
 
 # Scrape raw content
 python scrape_threads.py      # 10K Diver
-python scrape_moontower.py    # Moontower
+python scrape_moontower.py    # moontowermeta.com
+python scrape_blog.py         # blog.moontower.ai
+python scrape_substack.py     # moontower.substack.com
 
 # Enrich with AI (summaries, concepts, connections)
 python enrich_threads.py      # 10K Diver
-python enrich_moontower.py    # Moontower
+python enrich_moontower.py    # moontowermeta.com
+python enrich_blog.py         # blog.moontower.ai
+python enrich_substack.py     # moontower.substack.com
 ```
 
 ### Deploy

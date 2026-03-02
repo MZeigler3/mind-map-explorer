@@ -263,7 +263,8 @@ svg { width: 100%; height: 100%; }
   <div id="sidebar">
     <div id="dataset-switcher">
       <button class="ds-btn active" data-dataset="10kdiver">10K Diver</button>
-      <button class="ds-btn" data-dataset="moontower">Moontower</button>
+      <button class="ds-btn" data-dataset="moontower">Meta</button>
+      <button class="ds-btn" data-dataset="blog">Blog</button>
       <button class="ds-btn" data-dataset="substack">Substack</button>
     </div>
     <div id="sidebar-header">
@@ -357,13 +358,19 @@ const DATASETS = {
   "moontower": {
     file: "/.netlify/functions/data?dataset=moontower",
     staticFile: "data/moontower_enriched.json",
-    title: "Moontower Mind Map",
+    title: "moontowermeta.com",
     subtitle: "200+ articles on options, volatility & decision-making",
+  },
+  "blog": {
+    file: "/.netlify/functions/data?dataset=blog",
+    staticFile: "data/blog_enriched.json",
+    title: "blog.moontower.ai",
+    subtitle: "Blog posts on options analytics & volatility",
   },
   "substack": {
     file: "/.netlify/functions/data?dataset=substack",
     staticFile: "data/substack_enriched.json",
-    title: "Moontower Substack",
+    title: "moontower.substack.com",
     subtitle: "Newsletter posts on options, volatility & decision-making",
   },
 };

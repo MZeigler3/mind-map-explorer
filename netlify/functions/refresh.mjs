@@ -4,7 +4,7 @@ import * as cheerio from "cheerio";
 import { readFile } from "fs/promises";
 import { join } from "path";
 
-const VALID_DATASETS = { moontower: "moontower_enriched", "10kdiver": "threads_enriched", substack: "substack_enriched" };
+const VALID_DATASETS = { moontower: "moontower_enriched", "10kdiver": "threads_enriched", substack: "substack_enriched", blog: "blog_enriched" };
 const MODEL_NAME = "gemini-2.5-flash";
 
 // ============================================================
@@ -286,6 +286,112 @@ async function scrapeSubstackNew(existingIds) {
 }
 
 // ============================================================
+// blog.moontower.ai scraping (Ghost blog)
+// ============================================================
+async function scrapeBlogNew(existingIds) {
+  const BLOG_URL = "https://blog.moontower.ai";
+  const allPostUrls = [];
+
+  // Try Ghost sitemap first
+  try {
+    const sitemapHtml = await fetchPage(`${BLOG_URL}/sitemap-posts.xml`);
+    const $ = cheerio.load(sitemapHtml, { xmlMode: true });
+    $("url loc").each((_, el) => {
+      const loc = $(el).text().trim();
+      if (loc && loc !== BLOG_URL + "/") allPostUrls.push(loc);
+    });
+  } catch (e) {
+    console.log(`Blog sitemap error: ${e.message}`);
+  }
+
+  // Fall back to sitemap index
+  if (!allPostUrls.length) {
+    try {
+      const sitemapHtml = await fetchPage(`${BLOG_URL}/sitemap.xml`);
+      const $ = cheerio.load(sitemapHtml, { xmlMode: true });
+      // Check for sitemap index pointing to posts sitemap
+      const postsSitemapUrl = [];
+      $("sitemap loc").each((_, el) => {
+        const loc = $(el).text().trim();
+        if (loc.includes("posts")) postsSitemapUrl.push(loc);
+      });
+      for (const url of postsSitemapUrl) {
+        const subHtml = await fetchPage(url);
+        const $sub = cheerio.load(subHtml, { xmlMode: true });
+        $sub("url loc").each((_, el) => {
+          const loc = $sub(el).text().trim();
+          if (loc && loc !== BLOG_URL + "/") allPostUrls.push(loc);
+        });
+      }
+      // Also check direct url entries
+      if (!allPostUrls.length) {
+        $("url loc").each((_, el) => {
+          const loc = $(el).text().trim();
+          if (loc && loc !== BLOG_URL + "/") allPostUrls.push(loc);
+        });
+      }
+    } catch (e) {
+      console.log(`Blog sitemap index error: ${e.message}`);
+    }
+  }
+
+  // Filter out non-post URLs
+  const skipPrefixes = ["/tag/", "/author/", "/page/", "/ghost/"];
+  const postUrls = allPostUrls.filter((url) => {
+    const path = url.replace(BLOG_URL, "");
+    return !skipPrefixes.some((p) => path.startsWith(p)) && path !== "" && path !== "/";
+  });
+
+  // Find new posts
+  const newPostUrls = postUrls.filter((url) => {
+    // Generate a stable ID from the URL slug
+    const slug = url.replace(BLOG_URL, "").replace(/^\/|\/$/g, "");
+    return !existingIds.has(`blog_${slug}`);
+  });
+
+  console.log(`Blog: ${postUrls.length} total, ${newPostUrls.length} new`);
+
+  const results = [];
+  for (const postUrl of newPostUrls) {
+    try {
+      const pageHtml = await fetchPage(postUrl);
+      const $ = cheerio.load(pageHtml);
+
+      let title = $("h1").first().text().trim();
+      if (!title) title = $('meta[property="og:title"]').attr("content") || "";
+      if (!title) title = $("title").text().trim();
+
+      let text = "";
+      for (const selector of [".gh-content", ".post-content", ".post-full-content", ".article-content", "article", ".content", "main"]) {
+        const el = $(selector).first();
+        if (el.length) {
+          el.find("script, style, nav, footer, header").remove();
+          text = el.text().trim();
+          break;
+        }
+      }
+      if (!text) {
+        const body = $("body");
+        body.find("script, style, nav, footer, header").remove();
+        text = body.text().trim();
+      }
+
+      const slug = postUrl.replace(BLOG_URL, "").replace(/^\/|\/$/g, "");
+      results.push({
+        id: `blog_${slug}`,
+        title: title || slug,
+        url: postUrl,
+        category: "blog",
+        text: text || "",
+      });
+    } catch (e) {
+      console.log(`Error fetching blog post ${postUrl}: ${e.message}`);
+    }
+  }
+  return results;
+}
+
+// ============================================================
 // Gemini enrichment
 // ============================================================
 function getGenAI() {
@@ -483,6 +589,9 @@ export default async (req) => {
     } else if (dataset === "substack") {
       const existingIds = new Set(existingThreads.map((t) => t.id));
       newRawItems = await scrapeSubstackNew(existingIds);
+    } else if (dataset === "blog") {
+      const existingIds = new Set(existingThreads.map((t) => t.id));
+      newRawItems = await scrapeBlogNew(existingIds);
     } else {
       const existingUrls = new Set(existingThreads.map((t) => t.url));
       newRawItems = await scrapeMoontowerNew(existingUrls);
