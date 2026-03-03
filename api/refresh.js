@@ -146,10 +146,13 @@ async function scrapeMoontowerNew(existingUrls) {
 async function scrapeSubstackNew(existingIds) {
   const SUBSTACK_DOMAIN = "moontower.substack.com";
   const ARCHIVE_API = `https://${SUBSTACK_DOMAIN}/api/v1/archive`;
-  const PAGE_SIZE = 12;
+  const PAGE_SIZE = 50; // larger page = fewer round-trips
 
-  const allPosts = [];
+  // Paginate newest-first. Stop early once we hit already-seen posts
+  // or have collected enough new candidates.
+  const newPosts = [];
   let offset = 0;
+  let totalFetched = 0;
 
   while (true) {
     const url = `${ARCHIVE_API}?sort=new&limit=${PAGE_SIZE}&offset=${offset}`;
@@ -170,24 +173,36 @@ async function scrapeSubstackNew(existingIds) {
       if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
     }
     if (!resp || !resp.ok) break;
+
+    let posts;
     try {
-      const posts = await resp.json();
+      posts = await resp.json();
       if (!posts || posts.length === 0) break;
-      allPosts.push(...posts);
-      offset += PAGE_SIZE;
     } catch (e) {
       console.error(`Substack JSON parse error at offset ${offset}: ${e.message}`);
       break;
     }
+
+    totalFetched += posts.length;
+    let hitExisting = false;
+    for (const p of posts) {
+      if (existingIds.has(`ss_${p.id}`)) {
+        hitExisting = true;
+      } else {
+        newPosts.push(p);
+      }
+    }
+
+    offset += PAGE_SIZE;
+
+    // Stop paginating once we hit already-seen posts or have enough candidates
+    if (hitExisting || newPosts.length >= BATCH_LIMIT) break;
   }
 
-  console.log(`Substack: ${allPosts.length} total posts found`);
-  if (allPosts.length === 0) {
+  console.log(`Substack: ${totalFetched} total fetched, ${newPosts.length} new (processing up to ${BATCH_LIMIT})`);
+  if (totalFetched === 0) {
     throw new Error("Substack archive API returned no posts — the API may be blocked or down. Check Vercel function logs for details.");
   }
-
-  const newPosts = allPosts.filter((p) => !existingIds.has(`ss_${p.id}`));
-  console.log(`Substack: ${newPosts.length} new (processing up to ${BATCH_LIMIT})`);
 
   const results = [];
   for (const post of newPosts.slice(0, BATCH_LIMIT)) {
