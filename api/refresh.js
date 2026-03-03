@@ -7,6 +7,8 @@ import { join } from "path";
 const VALID_DATASETS = { moontower: "moontower_enriched", substack: "substack_enriched", blog: "blog_enriched" };
 const MODEL_NAME = "claude-haiku-4-5-20251001";
 const BATCH_LIMIT = 10; // max posts to scrape+enrich per refresh (to stay within 60s timeout)
+const ENRICHMENT_CONCURRENCY = 5; // parallel Claude calls for enrichment
+const TIME_BUDGET_MS = 55000; // reserve 5s before Vercel's 60s hard limit for saving
 
 export const maxDuration = 60;
 
@@ -359,10 +361,10 @@ function getClient() {
   return new Anthropic({ apiKey: key });
 }
 
-async function askClaude(client, prompt) {
+async function askClaude(client, prompt, maxTokens = 4096) {
   const msg = await client.messages.create({
     model: MODEL_NAME,
-    max_tokens: 4096,
+    max_tokens: maxTokens,
     messages: [{ role: "user", content: prompt }],
   });
   return stripFences(msg.content[0].text);
@@ -427,7 +429,7 @@ Guidelines:
 - Every item should belong to exactly one cluster
 - Use these colors: ${colors}`;
 
-  const text = await askClaude(client, prompt);
+  const text = await askClaude(client, prompt, 8192);
   return JSON.parse(text);
 }
 
@@ -537,8 +539,10 @@ export default async function handler(req, res) {
       newRawItems = await scrapeMoontowerNew(existingUrls);
     }
 
-    if (newRawItems.length === 0) {
-      return res.status(200).json({ success: true, newCount: 0, message: "No new articles found." });
+    // Check if there are stale items that need re-enrichment
+    const staleCount = existingThreads.filter((t) => !t.summary || !t.concepts || t.concepts.length === 0).length;
+    if (newRawItems.length === 0 && staleCount === 0) {
+      return res.status(200).json({ success: true, newCount: 0, message: "No new articles found. All existing articles are enriched." });
     }
 
     // 3. Assign IDs to new Moontower articles
@@ -549,45 +553,84 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4. Enrich new items via Claude
+    // 4. Enrich new items + re-enrich existing items with missing data
     const client = getClient();
+    const startTime = Date.now();
 
-    const enrichedNew = [];
-    for (const item of newRawItems) {
+    async function enrichWithFallback(item) {
       try {
         const meta = await enrichSingleItem(client, item);
-        enrichedNew.push({
+        return {
           ...item,
           summary: meta.summary || "",
           concepts: meta.concepts || [],
           difficulty: meta.difficulty || "intermediate",
-        });
+        };
       } catch (e) {
         console.log(`Enrichment error for ${item.title}: ${e.message}`);
-        enrichedNew.push({
-          ...item,
-          summary: "",
-          concepts: [],
-          difficulty: "intermediate",
-        });
+        return { ...item, summary: "", concepts: [], difficulty: "intermediate" };
       }
+    }
+
+    // Find existing items with missing enrichment (from previous failed runs)
+    const staleItems = existingThreads.filter(
+      (t) => !t.summary || !t.concepts || t.concepts.length === 0
+    );
+    const itemsToEnrich = [...newRawItems, ...staleItems.slice(0, BATCH_LIMIT)];
+    console.log(`Enriching: ${newRawItems.length} new + ${Math.min(staleItems.length, BATCH_LIMIT)} stale (of ${staleItems.length} total stale)`);
+
+    // Process in parallel batches of ENRICHMENT_CONCURRENCY
+    const enrichedResults = [];
+    for (let i = 0; i < itemsToEnrich.length; i += ENRICHMENT_CONCURRENCY) {
+      const batch = itemsToEnrich.slice(i, i + ENRICHMENT_CONCURRENCY);
+      const results = await Promise.all(batch.map(enrichWithFallback));
+      enrichedResults.push(...results);
+    }
+    const enrichDone = Date.now();
+    console.log(`Enrichment took ${enrichDone - startTime}ms for ${enrichedResults.length} items`);
+
+    // Split results: new items vs re-enriched existing items
+    const enrichedNew = enrichedResults.slice(0, newRawItems.length);
+    const reEnriched = enrichedResults.slice(newRawItems.length);
+
+    // Update existing threads with re-enriched data
+    if (reEnriched.length > 0) {
+      const reEnrichedMap = new Map(reEnriched.map((r) => [r.id, r]));
+      for (let i = 0; i < existingThreads.length; i++) {
+        const updated = reEnrichedMap.get(existingThreads[i].id);
+        if (updated && updated.summary) {
+          existingThreads[i] = { ...existingThreads[i], summary: updated.summary, concepts: updated.concepts, difficulty: updated.difficulty };
+        }
+      }
+      console.log(`Re-enriched ${reEnriched.filter((r) => r.summary).length} previously stale items`);
     }
 
     // 5. Merge with existing threads
     const allThreads = [...existingThreads, ...enrichedNew];
 
-    // 6. Re-generate connections on full dataset
-    console.log("Regenerating connections for full dataset...");
+    // 6. Re-generate connections on full dataset (skip if running low on time)
     let connections;
-    try {
-      connections = await generateConnections(client, allThreads);
-    } catch (e) {
-      console.log(`Connections error: ${e.message}`);
+    const timeUsed = Date.now() - startTime;
+    const timeLeft = TIME_BUDGET_MS - timeUsed;
+    if (timeLeft < 10000) {
+      console.log(`Skipping connections — only ${timeLeft}ms left (need ~10s)`);
       connections = {
         edges: existing.edges || [],
         clusters: existing.clusters || [],
         learning_paths: existing.learning_paths || [],
       };
+    } else {
+      console.log(`Regenerating connections for ${allThreads.length} items (${timeLeft}ms remaining)...`);
+      try {
+        connections = await generateConnections(client, allThreads);
+      } catch (e) {
+        console.log(`Connections error: ${e.message}`);
+        connections = {
+          edges: existing.edges || [],
+          clusters: existing.clusters || [],
+          learning_paths: existing.learning_paths || [],
+        };
+      }
     }
 
     // 7. Rebuild concepts list
@@ -604,15 +647,20 @@ export default async function handler(req, res) {
       .map((c) => ({ name: c.name, thread_ids: [...c.thread_ids], description: "" }))
       .sort((a, b) => b.thread_ids.length - a.thread_ids.length);
 
-    // 7.5 Generate quizzes for new items
-    console.log("Generating quizzes for new items...");
+    // 7.5 Generate quizzes for new items (skip if running low on time)
     let quizzes = existing.quizzes || [];
-    try {
-      const newQuizzes = await generateQuizzes(client, enrichedNew, connections.edges || []);
-      quizzes = [...quizzes, ...newQuizzes];
-      console.log(`Generated ${newQuizzes.length} new quiz questions`);
-    } catch (e) {
-      console.log(`Quiz generation error: ${e.message}`);
+    const timeLeftForQuizzes = TIME_BUDGET_MS - (Date.now() - startTime);
+    if (timeLeftForQuizzes < 8000) {
+      console.log(`Skipping quizzes — only ${timeLeftForQuizzes}ms left (need ~8s). Will generate on next refresh.`);
+    } else {
+      console.log(`Generating quizzes (${timeLeftForQuizzes}ms remaining)...`);
+      try {
+        const newQuizzes = await generateQuizzes(client, enrichedNew, connections.edges || []);
+        quizzes = [...quizzes, ...newQuizzes];
+        console.log(`Generated ${newQuizzes.length} new quiz questions`);
+      } catch (e) {
+        console.log(`Quiz generation error: ${e.message}`);
+      }
     }
 
     // 8. Assign clusters
@@ -644,13 +692,21 @@ export default async function handler(req, res) {
     });
 
     const remaining = totalNewAvailable - enrichedNew.length;
-    const remainingMsg = remaining > 0 ? ` ${remaining} more available — refresh again to continue.` : "";
+    const reEnrichedCount = reEnriched.filter((r) => r.summary).length;
+    const parts = [];
+    if (enrichedNew.length > 0) parts.push(`Added ${enrichedNew.length} new articles`);
+    if (reEnrichedCount > 0) parts.push(`re-enriched ${reEnrichedCount} existing`);
+    parts.push(`Total: ${allThreads.length}`);
+    if (remaining > 0) parts.push(`${remaining} more available — refresh again to continue`);
+    const staleRemaining = allThreads.filter((t) => !t.summary || !t.concepts || t.concepts.length === 0).length;
+    if (staleRemaining > 0) parts.push(`${staleRemaining} still need enrichment`);
+
     return res.status(200).json({
       success: true,
       newCount: enrichedNew.length,
       totalCount: allThreads.length,
       remaining,
-      message: `Added ${enrichedNew.length} new articles. Total: ${allThreads.length}.${remainingMsg}`,
+      message: parts.join(". ") + ".",
     });
   } catch (e) {
     console.error("Refresh error:", e);
