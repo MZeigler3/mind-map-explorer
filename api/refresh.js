@@ -17,7 +17,14 @@ export const maxDuration = 60;
 // ============================================================
 function stripFences(text) {
   text = text.trim();
-  if (text.startsWith("```")) text = text.split("\n", 1).length > 1 ? text.slice(text.indexOf("\n") + 1) : text;
+  if (text.startsWith("```")) {
+    const newlineIdx = text.indexOf("\n");
+    if (newlineIdx !== -1) {
+      text = text.slice(newlineIdx + 1);
+    } else {
+      text = text.slice(3);
+    }
+  }
   if (text.endsWith("```")) text = text.slice(0, -3);
   return text.trim();
 }
