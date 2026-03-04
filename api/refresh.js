@@ -683,15 +683,25 @@ export default async function handler(req, res) {
       .map((c) => ({ name: c.name, thread_ids: [...c.thread_ids], description: "" }))
       .sort((a, b) => b.thread_ids.length - a.thread_ids.length);
 
-    // 7.5 Generate quizzes for new items (skip if running low on time)
+    // 7.5 Generate quizzes for items that don't have them yet
     let quizzes = existing.quizzes || [];
+    const existingQuizThreadIds = new Set(quizzes.map((q) => q.thread_id));
+    // Include newly enriched items + any existing items without quizzes
+    const itemsNeedingQuizzes = [
+      ...enrichedNew.filter((t) => t.summary),
+      ...reEnriched.filter((t) => t.summary && !existingQuizThreadIds.has(t.id)),
+      ...allThreads.filter((t) => t.summary && !existingQuizThreadIds.has(t.id) && !enrichedNew.some((n) => n.id === t.id) && !reEnriched.some((r) => r.id === t.id)),
+    ].slice(0, BATCH_LIMIT);
+
     const timeLeftForQuizzes = TIME_BUDGET_MS - (Date.now() - startTime);
     if (timeLeftForQuizzes < 8000) {
       console.log(`Skipping quizzes — only ${timeLeftForQuizzes}ms left (need ~8s). Will generate on next refresh.`);
+    } else if (itemsNeedingQuizzes.length === 0) {
+      console.log("All items already have quizzes.");
     } else {
-      console.log(`Generating quizzes (${timeLeftForQuizzes}ms remaining)...`);
+      console.log(`Generating quizzes for ${itemsNeedingQuizzes.length} items (${timeLeftForQuizzes}ms remaining)...`);
       try {
-        const newQuizzes = await generateQuizzes(client, enrichedNew, connections.edges || []);
+        const newQuizzes = await generateQuizzes(client, itemsNeedingQuizzes, connections.edges || []);
         quizzes = [...quizzes, ...newQuizzes];
         console.log(`Generated ${newQuizzes.length} new quiz questions`);
       } catch (e) {
@@ -716,13 +726,35 @@ export default async function handler(req, res) {
       }
     }
 
+    // 8.5 Ensure every cluster name used by threads has an entry in the clusters array
+    const clusterColors = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"];
+    const existingClusterNames = new Set((connections.clusters || []).map((c) => c.name));
+    const missingClusters = {};
+    for (const t of allThreads) {
+      if (t.cluster && !existingClusterNames.has(t.cluster)) {
+        if (!missingClusters[t.cluster]) missingClusters[t.cluster] = [];
+        missingClusters[t.cluster].push(t.id);
+      }
+    }
+    const finalClusters = [...(connections.clusters || [])];
+    let colorIdx = finalClusters.length;
+    for (const [name, threadIds] of Object.entries(missingClusters)) {
+      finalClusters.push({
+        name,
+        color: clusterColors[colorIdx % clusterColors.length],
+        thread_ids: threadIds,
+        description: `Auto-generated cluster from category: ${name}`,
+      });
+      colorIdx++;
+    }
+
     // 9. Build final output
     const output = {
       threads: allThreads,
       concepts: conceptsList,
       edges: connections.edges || [],
       learning_paths: connections.learning_paths || [],
-      clusters: connections.clusters || [],
+      clusters: finalClusters,
       quizzes,
     };
 
