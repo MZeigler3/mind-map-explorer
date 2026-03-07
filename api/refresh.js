@@ -4,7 +4,7 @@ import * as cheerio from "cheerio";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-const VALID_DATASETS = { moontower: "moontower_enriched", substack: "substack_enriched", blog: "blog_enriched" };
+const VALID_DATASETS = { moontower: "moontower_enriched" };
 const MODEL_NAME = "claude-haiku-4-5-20251001";
 const BATCH_LIMIT = 10; // max posts to scrape+enrich per refresh (to stay within 60s timeout)
 const ENRICHMENT_CONCURRENCY = 5; // parallel Claude calls for enrichment
@@ -147,216 +147,6 @@ async function scrapeMoontowerNew(existingUrls) {
     }
   }
   return results;
-}
-
-// ============================================================
-// Substack scraping
-// ============================================================
-async function scrapeSubstackNew(existingIds) {
-  const SUBSTACK_DOMAIN = "moontower.substack.com";
-  const ARCHIVE_API = `https://${SUBSTACK_DOMAIN}/api/v1/archive`;
-  const PAGE_SIZE = 50; // larger page = fewer round-trips
-
-  // Paginate newest-first. Stop early once we hit already-seen posts
-  // or have collected enough new candidates.
-  const newPosts = [];
-  let offset = 0;
-  let totalFetched = 0;
-
-  while (true) {
-    const url = `${ARCHIVE_API}?sort=new&limit=${PAGE_SIZE}&offset=${offset}`;
-    let resp;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        resp = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; MindMapBot/1.0)" },
-          signal: AbortSignal.timeout(20000),
-        });
-        if (resp.ok) break;
-        console.error(`Substack archive API returned HTTP ${resp.status} at offset ${offset} (attempt ${attempt + 1})`);
-        resp = null;
-      } catch (e) {
-        console.error(`Substack fetch error at offset ${offset} (attempt ${attempt + 1}): ${e.message}`);
-        resp = null;
-      }
-      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-    }
-    if (!resp || !resp.ok) break;
-
-    let posts;
-    try {
-      posts = await resp.json();
-      if (!posts || posts.length === 0) break;
-    } catch (e) {
-      console.error(`Substack JSON parse error at offset ${offset}: ${e.message}`);
-      break;
-    }
-
-    totalFetched += posts.length;
-    let hitExisting = false;
-    for (const p of posts) {
-      if (existingIds.has(`ss_${p.id}`)) {
-        hitExisting = true;
-      } else {
-        newPosts.push(p);
-      }
-    }
-
-    offset += PAGE_SIZE;
-
-    // Stop paginating once we hit already-seen posts or have enough candidates
-    if (hitExisting || newPosts.length >= BATCH_LIMIT) break;
-  }
-
-  console.log(`Substack: ${totalFetched} total fetched, ${newPosts.length} new (processing up to ${BATCH_LIMIT})`);
-  if (totalFetched === 0) {
-    throw new Error("Substack archive API returned no posts — the API may be blocked or down. Check Vercel function logs for details.");
-  }
-
-  const results = [];
-  for (const post of newPosts.slice(0, BATCH_LIMIT)) {
-    try {
-      const postUrl = post.canonical_url || `https://${SUBSTACK_DOMAIN}/p/${post.slug}`;
-      let text = "";
-
-      if (post.body_html) {
-        const $ = cheerio.load(post.body_html);
-        $("script, style, nav, footer, header").remove();
-        text = $.root().text().trim();
-      } else {
-        const pageHtml = await fetchPage(postUrl);
-        const $ = cheerio.load(pageHtml);
-        for (const selector of [".body", ".post-content", ".available-content", "article", "main"]) {
-          const el = $(selector).first();
-          if (el.length) {
-            el.find("script, style, nav, footer, header").remove();
-            text = el.text().trim();
-            break;
-          }
-        }
-        if (!text) {
-          const body = $("body");
-          body.find("script, style, nav, footer, header").remove();
-          text = body.text().trim();
-        }
-      }
-
-      results.push({
-        id: `ss_${post.id}`,
-        title: post.title || "Untitled",
-        subtitle: post.subtitle || "",
-        url: postUrl,
-        date: post.post_date || null,
-        category: post.type || "newsletter",
-        text: text || "",
-      });
-    } catch (e) {
-      console.log(`Error fetching Substack post ${post.id}: ${e.message}`);
-    }
-  }
-  return { items: results, totalNew: newPosts.length };
-}
-
-// ============================================================
-// blog.moontower.ai scraping (Ghost blog)
-// ============================================================
-async function scrapeBlogNew(existingIds) {
-  const BLOG_URL = "https://blog.moontower.ai";
-  const allPostUrls = [];
-
-  try {
-    const sitemapHtml = await fetchPage(`${BLOG_URL}/sitemap-posts.xml`);
-    const $ = cheerio.load(sitemapHtml, { xmlMode: true });
-    $("url loc").each((_, el) => {
-      const loc = $(el).text().trim();
-      if (loc && loc !== BLOG_URL + "/") allPostUrls.push(loc);
-    });
-  } catch (e) {
-    console.log(`Blog sitemap error: ${e.message}`);
-  }
-
-  if (!allPostUrls.length) {
-    try {
-      const sitemapHtml = await fetchPage(`${BLOG_URL}/sitemap.xml`);
-      const $ = cheerio.load(sitemapHtml, { xmlMode: true });
-      const postsSitemapUrl = [];
-      $("sitemap loc").each((_, el) => {
-        const loc = $(el).text().trim();
-        if (loc.includes("posts")) postsSitemapUrl.push(loc);
-      });
-      for (const url of postsSitemapUrl) {
-        const subHtml = await fetchPage(url);
-        const $sub = cheerio.load(subHtml, { xmlMode: true });
-        $sub("url loc").each((_, el) => {
-          const loc = $sub(el).text().trim();
-          if (loc && loc !== BLOG_URL + "/") allPostUrls.push(loc);
-        });
-      }
-      if (!allPostUrls.length) {
-        $("url loc").each((_, el) => {
-          const loc = $(el).text().trim();
-          if (loc && loc !== BLOG_URL + "/") allPostUrls.push(loc);
-        });
-      }
-    } catch (e) {
-      console.log(`Blog sitemap index error: ${e.message}`);
-    }
-  }
-
-  const skipPrefixes = ["/tag/", "/author/", "/page/", "/ghost/"];
-  const postUrls = allPostUrls.filter((url) => {
-    const path = url.replace(BLOG_URL, "");
-    return !skipPrefixes.some((p) => path.startsWith(p)) && path !== "" && path !== "/";
-  });
-
-  const newPostUrls = postUrls.filter((url) => {
-    const slug = url.replace(BLOG_URL, "").replace(/^\/|\/$/g, "");
-    return !existingIds.has(`blog_${slug}`);
-  });
-
-  console.log(`Blog: ${postUrls.length} total, ${newPostUrls.length} new (processing up to ${BATCH_LIMIT})`);
-  if (postUrls.length === 0) {
-    throw new Error("blog.moontower.ai sitemap returned no posts — the site may be down or the sitemap structure changed.");
-  }
-
-  const results = [];
-  for (const postUrl of newPostUrls.slice(0, BATCH_LIMIT)) {
-    try {
-      const pageHtml = await fetchPage(postUrl);
-      const $ = cheerio.load(pageHtml);
-
-      let title = $("h1").first().text().trim();
-      if (!title) title = $('meta[property="og:title"]').attr("content") || "";
-      if (!title) title = $("title").text().trim();
-
-      let text = "";
-      for (const selector of [".gh-content", ".post-content", ".post-full-content", ".article-content", "article", ".content", "main"]) {
-        const el = $(selector).first();
-        if (el.length) {
-          el.find("script, style, nav, footer, header").remove();
-          text = el.text().trim();
-          break;
-        }
-      }
-      if (!text) {
-        const body = $("body");
-        body.find("script, style, nav, footer, header").remove();
-        text = body.text().trim();
-      }
-
-      const slug = postUrl.replace(BLOG_URL, "").replace(/^\/|\/$/g, "");
-      results.push({
-        id: `blog_${slug}`,
-        title: title || slug,
-        url: postUrl,
-        category: "blog",
-        text: text || "",
-      });
-    } catch (e) {
-      console.log(`Error fetching blog post ${postUrl}: ${e.message}`);
-    }
-  }
-  return { items: results, totalNew: newPostUrls.length };
 }
 
 // ============================================================
@@ -536,22 +326,9 @@ export default async function handler(req, res) {
     const existingThreads = existing.threads || [];
 
     // 2. Scrape for new items (batched — returns up to BATCH_LIMIT)
-    let newRawItems;
-    let totalNewAvailable = 0;
-    if (dataset === "substack") {
-      const existingIds = new Set(existingThreads.map((t) => t.id));
-      const { items, totalNew } = await scrapeSubstackNew(existingIds);
-      newRawItems = items;
-      totalNewAvailable = totalNew;
-    } else if (dataset === "blog") {
-      const existingIds = new Set(existingThreads.map((t) => t.id));
-      const { items, totalNew } = await scrapeBlogNew(existingIds);
-      newRawItems = items;
-      totalNewAvailable = totalNew;
-    } else {
-      const existingUrls = new Set(existingThreads.map((t) => t.url));
-      newRawItems = await scrapeMoontowerNew(existingUrls);
-    }
+    const existingUrls = new Set(existingThreads.map((t) => t.url));
+    const newRawItems = await scrapeMoontowerNew(existingUrls);
+    let totalNewAvailable = newRawItems.length;
 
     // Check if there are stale items that need re-enrichment (missing summary/concepts OR missing category)
     const needsCategory = (t) => !t.category || t.category === "Unknown" || t.category === "General";
@@ -562,13 +339,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true, newCount: 0, message: "No new articles found. All existing articles are enriched." });
     }
 
-    // 3. Assign IDs to new Moontower articles
-    if (dataset === "moontower") {
-      const maxId = Math.max(0, ...existingThreads.map((t) => parseInt(t.id.replace("mt_", "")) || 0));
-      newRawItems.forEach((item, i) => {
-        item.id = `mt_${maxId + i + 1}`;
-      });
-    }
+    // 3. Assign IDs to new articles
+    const maxId = Math.max(0, ...existingThreads.map((t) => parseInt(t.id.replace("mt_", "")) || 0));
+    newRawItems.forEach((item, i) => {
+      item.id = `mt_${maxId + i + 1}`;
+    });
 
     // 4. Enrich new items + re-enrich existing items with missing data
     const client = getClient();

@@ -2,13 +2,13 @@ import { list } from "@vercel/blob";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-const VALID_DATASETS = { moontower: "moontower_enriched", substack: "substack_enriched", blog: "blog_enriched" };
+const VALID_DATASETS = { moontower: "moontower_enriched" };
 
 export default async function handler(req, res) {
   const dataset = req.query.dataset || "moontower";
 
   if (!VALID_DATASETS[dataset]) {
-    return res.status(400).json({ error: "Invalid dataset. Use moontower, substack, or blog." });
+    return res.status(400).json({ error: "Invalid dataset. Use moontower." });
   }
 
   const blobKey = VALID_DATASETS[dataset];
