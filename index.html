@@ -418,6 +418,10 @@ function buildSidebar() {
 function renderThreadList() {
   const container = document.getElementById("thread-list");
   const threads = getFilteredThreads();
+  if (threads.length === 0) {
+    container.innerHTML = `<p style="color:var(--text2);padding:1rem;text-align:center">No posts yet for this dataset.</p>`;
+    return;
+  }
   container.innerHTML = threads.map(t => `
     <div class="thread-item" data-id="${t.id}">
       <h3>${t.title}</h3>
