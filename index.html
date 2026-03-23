@@ -357,7 +357,7 @@ const DATASETS = {
     file: "/api/data?dataset=cultishcreative",
     staticFile: "data/cultishcreative_enriched.json",
     title: "cultishcreative.com",
-    subtitle: "Posts on creativity, marketing & culture",
+    subtitle: "Loading posts…",
   },
 };
 
@@ -376,7 +376,9 @@ async function loadData(dataset) {
     DATA = await resp.json();
     document.getElementById("loading").classList.add("hidden");
     document.getElementById("dataset-title").textContent = info.title;
-    document.getElementById("dataset-subtitle").textContent = info.subtitle;
+    const count = (DATA.threads || []).length;
+    document.getElementById("dataset-subtitle").textContent =
+      count > 0 ? `${count} posts` : info.subtitle;
     // Reset state
     activeConcept = null;
     activePath = null;
