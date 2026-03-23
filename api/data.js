@@ -3,7 +3,10 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { normalizeDataset } from "./categories.js";
 
-const VALID_DATASETS = { moontower: "moontower_enriched" };
+const VALID_DATASETS = {
+  moontower: "moontower_enriched",
+  cultishcreative: "cultishcreative_enriched",
+};
 
 export default async function handler(req, res) {
   const dataset = req.query.dataset || "moontower";
@@ -39,8 +42,8 @@ export default async function handler(req, res) {
     }
   }
 
-  // Always normalize categories/clusters before serving
-  normalizeDataset(data);
+  // Normalize categories/clusters (Moontower-specific canonical categories)
+  if (dataset === "moontower") normalizeDataset(data);
 
   res.setHeader("Cache-Control", "public, max-age=60");
   return res.status(200).json(data);
